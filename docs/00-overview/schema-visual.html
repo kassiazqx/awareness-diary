@@ -1,0 +1,216 @@
+
+<style>
+#erd svg { max-width:100%; }
+#erd-wrap { overflow-x:auto; }
+.card { background:var(--color-background-secondary); border-radius:var(--border-radius-lg); padding:13px; }
+.card-title { font-weight:500; font-size:13px; color:var(--color-text-primary); margin-bottom:5px }
+.card-body { font-size:12px; color:var(--color-text-secondary); line-height:1.65 }
+</style>
+<div id="erd-wrap"><div id="erd" style="min-height:100px"></div></div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:18px 0 4px">
+
+<div class="card" style="border-left:3px solid #1D9E75">
+  <div class="card-title">模块顺序 — 三层区域，sort_order 管列表</div>
+  <div class="card-body">entry 展示时分三个区域：① 固定头部（entry_date + primary thread_id，直接存在 entries 表，不是模块，前端永远渲染在最顶部）；② 用户拖拽的 entry_modules，每行有 sort_order，前端按序渲染；③ 固定底部（created_at）。Todo 引用、天气、次要 Thread 引用全都是 entry_modules 里的行，可以拖动排序。</div>
+</div>
+
+<div class="card" style="border-left:3px solid #7F77DD">
+  <div class="card-title">structured_data 存什么</div>
+  <div class="card-body">非富文本模块用的字段，不同模块类型存不同结构：天气模块存 {"temp":22,"condition":"sunny"}；Todo引用模块存 {"todo_id":123}；Thread引用模块存 {"thread_id":45}；情绪模块存 {"score":7,"valence":"positive"}。richtext 模块的 structured_data 为 null，只用 content_json + content_plain。</div>
+</div>
+
+<div class="card" style="border-left:3px solid #BA7517">
+  <div class="card-title">Todo 完成系统 — todo_completions 是核心</div>
+  <div class="card-body">todos 表只存"定义"，不存完成状态。每次完成（含补记）往 todo_completions 插一行，completed_at 可以是过去的时间，is_backdated 标记是否补记。常青型 Todo（八段锦）设 is_evergreen=true，没有截止日，永不归档，统计页直接 COUNT(*) 查 todo_completions。重复规则存 repeat_rule JSON，如 {"freq":"weekly","days":[1,3,5]}。</div>
+</div>
+
+<div class="card" style="border-left:3px solid #378ADD">
+  <div class="card-title">templates — source 字段代替两个 bool</div>
+  <div class="card-body">is_system + is_user_created 两个 bool 互相冲突（用户改了系统模版算哪个？）。改为单个 source 枚举：system 是系统预设，不可编辑；user 是用户新建；cloned_from_id 记录"从哪个系统模版克隆而来"，为 null 则是从零新建。entries.template_origin_id 只是起点记录，不约束后续编辑，用于统计哪些模版最常用，以及"重置回模版"的 UX 入口。</div>
+</div>
+
+<div class="card" style="border-left:3px solid #A32D2D;grid-column:1/-1">
+  <div class="card-title">统一 analyses 表 — 永久追加，永不覆盖，基础统计和 AI 内容分开字段</div>
+  <div class="card-body">thread_analyses 并入通用 analyses 表，type 字段区分：thread（主线定期分析）/ period（周报/月报）/ tag_filter（按标签+日期范围筛查）/ custom（手动触发任意范围）。stats_json 存当时快照的基础统计（entry数/字数/情绪均值/各tag频率/打卡次数）；analysis_json + analysis_plain 存 AI 文字分析两层。每次分析都是新的一行，永不删除旧行，前端按 created_at 排列即可看到时间线演变。thread_analysis_settings 保留作为主线级触发规则，全局默认规则存在 app_settings 表。</div>
+</div>
+
+</div>
+
+<script type="module">
+import mermaid from 'https://esm.sh/mermaid@11/dist/mermaid.esm.min.mjs';
+const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+await document.fonts.ready;
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'base',
+  fontFamily: '"Anthropic Sans", sans-serif',
+  themeVariables: {
+    darkMode: dark,
+    fontSize: '12px',
+    fontFamily: '"Anthropic Sans", sans-serif',
+    lineColor: dark ? '#9c9a92' : '#73726c',
+    textColor: dark ? '#c2c0b6' : '#3d3d3a',
+  },
+});
+
+const diagram = `erDiagram
+  tags {
+    int id PK
+    string type "emotion/context/person/need"
+    string value
+    string color
+  }
+  module_types {
+    string key PK "emotion/event/todo_ref/weather..."
+    string display_name
+    string default_hint
+    string data_type "richtext/reference/structured"
+  }
+  templates {
+    int id PK
+    string name
+    string source "system/user"
+    int cloned_from_id FK "nullable"
+    datetime created_at
+  }
+  template_modules {
+    int id PK
+    int template_id FK
+    string module_type_key FK
+    int sort_order
+    string custom_label
+    string custom_hint
+    bool is_required
+  }
+  threads {
+    int id PK
+    string title
+    string description
+    string color
+    bool is_active
+    int sort_order
+    datetime created_at
+  }
+  thread_analysis_settings {
+    int thread_id PK,FK
+    int trigger_every_n_entries
+    int trigger_every_n_days
+    bool is_auto_enabled
+  }
+  app_settings {
+    string key PK "global_analysis_interval..."
+    string value
+  }
+  entries {
+    int id PK
+    int primary_thread_id FK "nullable"
+    int template_origin_id FK "nullable, 起点模版"
+    date entry_date "支持补记"
+    datetime created_at
+    datetime updated_at
+  }
+  entry_modules {
+    int id PK
+    int entry_id FK
+    string module_type_key FK
+    int sort_order
+    text content_json "富文本层1"
+    text content_plain "富文本层2"
+    json structured_data "天气/引用/情绪分"
+  }
+  todos {
+    int id PK
+    string title
+    string repeat_type "none/daily/weekly/custom"
+    json repeat_rule
+    bool is_evergreen "永远不消失"
+    bool is_archived
+    date due_date "nullable"
+    int priority
+    datetime created_at
+  }
+  todo_completions {
+    int id PK
+    int todo_id FK
+    datetime completed_at "支持补记历史时间"
+    bool is_backdated
+    text note
+    int entry_id FK "nullable, 关联日记"
+  }
+  media {
+    int id PK
+    int entry_id FK
+    string file_path
+    string file_type
+    datetime created_at
+  }
+  analyses {
+    int id PK
+    string type "thread/period/tag_filter/custom"
+    int thread_id FK "nullable"
+    string period_type "weekly/monthly/custom"
+    date period_start
+    date period_end
+    json filter_tag_ids "nullable"
+    json entry_ids_snapshot
+    json stats_json "次数字数情绪标签频率"
+    text analysis_json "AI分析层1"
+    text analysis_plain "AI分析层2"
+    string trigger_type "manual/scheduled/auto"
+    datetime created_at
+  }
+  ai_suggestions {
+    int id PK
+    int analysis_id FK
+    string suggestion_type "new_thread/tag/insight"
+    text content_json
+    string user_decision "adopted/rejected/pending"
+    datetime decided_at
+  }
+
+  threads ||--o{ entries : "primary"
+  threads ||--|| thread_analysis_settings : "规则"
+  threads ||--o{ analyses : "主线分析"
+  templates ||--o{ template_modules : " "
+  module_types ||--o{ template_modules : " "
+  module_types ||--o{ entry_modules : " "
+  entries ||--o{ entry_modules : "模块实例"
+  entries ||--o{ media : "附件"
+  todos ||--o{ todo_completions : "完成记录"
+  analyses ||--o{ ai_suggestions : "AI建议"
+
+  entries }o--o{ tags : "entry_tags"
+  entries }o--o{ threads : "entry_threads次要"
+  todos }o--o{ tags : "todo_tags"
+  todos }o--o{ threads : "todo_threads"
+  todos }o--o{ entries : "todo_entries"
+`;
+
+try {
+  const { svg } = await mermaid.render('erd-svg-v3', diagram);
+  document.getElementById('erd').innerHTML = svg;
+  document.querySelectorAll('#erd svg .node').forEach(node => {
+    const firstPath = node.querySelector('path[d]');
+    if (!firstPath) return;
+    const d = firstPath.getAttribute('d');
+    const nums = d.match(/-?[\d.]+/g)?.map(Number);
+    if (!nums || nums.length < 8) return;
+    const xs = [nums[0], nums[2], nums[4], nums[6]];
+    const ys = [nums[1], nums[3], nums[5], nums[7]];
+    const x = Math.min(...xs), y = Math.min(...ys);
+    const w = Math.max(...xs) - x, h = Math.max(...ys) - y;
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', x); rect.setAttribute('y', y);
+    rect.setAttribute('width', w); rect.setAttribute('height', h);
+    rect.setAttribute('rx', '8');
+    for (const a of ['fill','stroke','stroke-width','class','style']) {
+      if (firstPath.hasAttribute(a)) rect.setAttribute(a, firstPath.getAttribute(a));
+    }
+    firstPath.replaceWith(rect);
+  });
+} catch(e) {
+  document.getElementById('erd').innerHTML = '<p style="color:var(--color-text-secondary);padding:16px">渲染中...</p>';
+  console.error(e);
+}
+</script>

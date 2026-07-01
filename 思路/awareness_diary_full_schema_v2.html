@@ -1,0 +1,204 @@
+
+<style>
+#erd svg { max-width: 100%; }
+#erd-wrap { overflow-x: auto; }
+</style>
+<h2 class="sr-only">觉察日记完整数据库结构 v2 — 含模块系统、主线分析历史、Todo多向关联</h2>
+<div id="erd-wrap"><div id="erd" style="min-height:120px"></div></div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:18px 0 4px">
+
+  <div style="background:var(--color-background-secondary);border-radius:var(--border-radius-lg);padding:13px;border-left:3px solid #1D9E75">
+    <div style="font-weight:500;font-size:13px;color:var(--color-text-primary);margin-bottom:5px">模块系统：module_types 是目录，entry_modules 是实例</div>
+    <div style="font-size:12px;color:var(--color-text-secondary);line-height:1.65">系统内置固定的模块类型目录（情绪/事件/人物/天气/Todo引用/Thread引用/认知/行动/复盘/自由文本……），template_modules 把它们排成有序列表并可覆盖标题和引导词，entry_modules 是用户真正填写后的实例，每行存一个模块的 content_json + content_plain。学习/感恩/幸运模版的特殊字段，统一用"自由文本模块 + 不同 custom_label"实现，不需要新建模块类型。</div>
+  </div>
+
+  <div style="background:var(--color-background-secondary);border-radius:var(--border-radius-lg);padding:13px;border-left:3px solid #7F77DD">
+    <div style="font-weight:500;font-size:13px;color:var(--color-text-primary);margin-bottom:5px">富文本三层对应关系</div>
+    <div style="font-size:12px;color:var(--color-text-secondary);line-height:1.65">三层不在 entries 表，而是在每个 entry_modules 行里。每个模块实例都有自己的 content_json（TipTap JSON 源码，层1）+ content_plain（剥离格式的纯文字，层2）。层3（HTML 渲染）永远不入库，由前端从 content_json 实时生成。thread_analyses 的分析结果同理，也用 analysis_json + analysis_plain 两个字段存。</div>
+  </div>
+
+  <div style="background:var(--color-background-secondary);border-radius:var(--border-radius-lg);padding:13px;border-left:3px solid #BA7517">
+    <div style="font-weight:500;font-size:13px;color:var(--color-text-primary);margin-bottom:5px">Todo 关联 6 条 entry → 表里就是 6 行，完全正确</div>
+    <div style="font-size:12px;color:var(--color-text-secondary);line-height:1.65">junction 表每行只存两个 ID，单行体积极小，6 行完全不是问题。查"这个 todo 被哪些 entry 提到"只需一条 SELECT，速度极快。todo 同时关联多个 thread 同理，todo_threads 表里就多几行，这是标准关系型数据库做法。</div>
+  </div>
+
+  <div style="background:var(--color-background-secondary);border-radius:var(--border-radius-lg);padding:13px;border-left:3px solid #378ADD">
+    <div style="font-weight:500;font-size:13px;color:var(--color-text-primary);margin-bottom:5px">template_id 保留但变为"出发点记录"</div>
+    <div style="font-size:12px;color:var(--color-text-secondary);line-height:1.65">entries.started_from_template_id 可为空（自由笔记），也可指向某个模版（但用户之后增删模块，entry_modules 里的实际顺序已是最终状态）。它只是记录"我当时从哪个模版开始的"，不约束后续编辑，不影响渲染。自由笔记 = template_id 为空 + 至少一个 free_text 类型的 entry_module，可以随意漫谈，后期让 AI 分析后把内容填入对应模块字段。</div>
+  </div>
+
+  <div style="background:var(--color-background-secondary);border-radius:var(--border-radius-lg);padding:13px;border-left:3px solid #A32D2D;grid-column:1/-1">
+    <div style="font-weight:500;font-size:13px;color:var(--color-text-primary);margin-bottom:5px">Thread 分析历史：thread_analyses + thread_analysis_settings</div>
+    <div style="font-size:12px;color:var(--color-text-secondary);line-height:1.65">每次 AI 分析后往 thread_analyses 插一行（含时间戳、触发方式、当时的 entry 总数快照、analysis_json + analysis_plain）。前端查"这条主线的所有历史分析"只需 WHERE thread_id = ? ORDER BY created_at，天然按时间线排列，可展开每一条看年初/3月/5月各是什么状态。触发规则存在 thread_analysis_settings（每 N 条 entry 触发一次 OR 每 M 天触发一次），全局默认值 + 每条主线可独立覆盖。</div>
+  </div>
+
+</div>
+
+<script type="module">
+import mermaid from 'https://esm.sh/mermaid@11/dist/mermaid.esm.min.mjs';
+const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+await document.fonts.ready;
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'base',
+  fontFamily: '"Anthropic Sans", sans-serif',
+  themeVariables: {
+    darkMode: dark,
+    fontSize: '13px',
+    fontFamily: '"Anthropic Sans", sans-serif',
+    lineColor: dark ? '#9c9a92' : '#73726c',
+    textColor: dark ? '#c2c0b6' : '#3d3d3a',
+  },
+});
+
+const diagram = `erDiagram
+  module_types {
+    string key PK "emotion / event / free_text ..."
+    string display_name "情绪 / 事件 / 自由文本"
+    string default_hint "引导词"
+    string data_type "richtext / reference / structured"
+  }
+  templates {
+    int id PK
+    string name "情绪觉察长 / 感恩 ..."
+    bool is_system
+    bool is_user_created
+  }
+  template_modules {
+    int id PK
+    int template_id FK
+    string module_type_key FK
+    int sort_order
+    string custom_label "覆盖默认名"
+    string custom_hint "覆盖引导词"
+  }
+  entries {
+    int id PK
+    int thread_id FK
+    int started_from_template_id FK "nullable"
+    date entry_date
+    datetime created_at
+  }
+  entry_modules {
+    int id PK
+    int entry_id FK
+    string module_type_key FK
+    int sort_order "实际排列顺序"
+    text content_json "富文本层1 TipTap JSON"
+    text content_plain "富文本层2 纯文字"
+    json structured_data "引用ID或天气数据"
+  }
+  threads {
+    int id PK
+    string title
+    string description
+    bool is_active
+    datetime created_at
+  }
+  thread_analysis_settings {
+    int thread_id PK,FK
+    int trigger_every_n_entries "N条entry触发"
+    int trigger_every_n_days "N天触发"
+    bool is_auto_enabled
+  }
+  thread_analyses {
+    int id PK
+    int thread_id FK
+    text analysis_json "分析内容层1"
+    text analysis_plain "分析内容层2"
+    string trigger_type "manual/count/schedule"
+    int entry_count_snapshot "触发时entry总数"
+    datetime created_at
+  }
+  todos {
+    int id PK
+    string title
+    bool is_done
+    date due_date
+    int priority
+  }
+  todo_entries {
+    int todo_id FK
+    int entry_id FK
+  }
+  todo_threads {
+    int todo_id FK
+    int thread_id FK
+  }
+  tags {
+    int id PK
+    string type "emotion/context/person/need"
+    string value
+  }
+  entry_tags {
+    int entry_id FK
+    int tag_id FK
+  }
+  todo_tags {
+    int todo_id FK
+    int tag_id FK
+  }
+  thread_tags {
+    int thread_id FK
+    int tag_id FK
+  }
+  ai_thread_suggestions {
+    int id PK
+    int analysis_id FK
+    string suggested_title
+    string user_decision "adopted/rejected/pending"
+  }
+
+  templates ||--o{ template_modules : " "
+  module_types ||--o{ template_modules : " "
+  module_types ||--o{ entry_modules : " "
+  entries ||--o{ entry_modules : "模块实例"
+  threads ||--o{ entries : "1对多"
+  threads ||--o{ thread_analyses : "历史分析"
+  threads ||--|| thread_analysis_settings : "触发规则"
+  thread_analyses ||--o{ ai_thread_suggestions : "AI建议"
+  todos ||--o{ todo_entries : " "
+  todo_entries }o--|| entries : " "
+  todos ||--o{ todo_threads : " "
+  todo_threads }o--|| threads : " "
+  entries ||--o{ entry_tags : " "
+  entry_tags }o--|| tags : " "
+  todos ||--o{ todo_tags : " "
+  todo_tags }o--|| tags : " "
+  threads ||--o{ thread_tags : " "
+  thread_tags }o--|| tags : " "
+`;
+
+try {
+  const { svg } = await mermaid.render('erd-svg', diagram);
+  document.getElementById('erd').innerHTML = svg;
+
+  document.querySelectorAll('#erd svg .node').forEach(node => {
+    const firstPath = node.querySelector('path[d]');
+    if (!firstPath) return;
+    const d = firstPath.getAttribute('d');
+    const nums = d.match(/-?[\d.]+/g)?.map(Number);
+    if (!nums || nums.length < 8) return;
+    const xs = [nums[0], nums[2], nums[4], nums[6]];
+    const ys = [nums[1], nums[3], nums[5], nums[7]];
+    const x = Math.min(...xs), y = Math.min(...ys);
+    const w = Math.max(...xs) - x, h = Math.max(...ys) - y;
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', x); rect.setAttribute('y', y);
+    rect.setAttribute('width', w); rect.setAttribute('height', h);
+    rect.setAttribute('rx', '8');
+    for (const a of ['fill','stroke','stroke-width','class','style']) {
+      if (firstPath.hasAttribute(a)) rect.setAttribute(a, firstPath.getAttribute(a));
+    }
+    firstPath.replaceWith(rect);
+  });
+
+  document.querySelectorAll('#erd svg .row-rect-odd path, #erd svg .row-rect-even path').forEach(p => {
+    p.setAttribute('stroke', 'none');
+  });
+} catch(e) {
+  document.getElementById('erd').innerHTML = '<p style="color:var(--color-text-secondary);padding:16px">图表渲染中，请稍候...</p>';
+  console.error(e);
+}
+</script>
